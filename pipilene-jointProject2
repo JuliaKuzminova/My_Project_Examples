@@ -1,0 +1,117 @@
+RANDOM_STATE = 38
+TEST_SIZE = 0.25
+
+# подгружаем данные и делим их выборки для обучения модлей
+
+X_train, X_test, y_train, y_test = train_test_split(
+    df_satisfaction.drop(columns=['id', 'job_satisfaction_rate']),
+    df_satisfaction['job_satisfaction_rate'], 
+    test_size = TEST_SIZE, 
+    random_state = RANDOM_STATE,
+    stratify = df_satisfaction['job_satisfaction_rate']
+)
+
+# готовим пайплайны 
+
+ohe_columns = ['dept', 'level', 'last_year_promo', 'last_year_violations']
+ord_columns = ['workload']
+num_columns = ['employment_years', 'supervisor_evaluation', 'salary']
+
+
+# создаём пайплайн для подготовки признаков из списка ohe_columns: заполнение пропусков и OHE-кодирование
+# SimpleImputer + OHE
+ohe_pipe = Pipeline(
+    [('simpleImputer_ohe', SimpleImputer(missing_values=np.nan, strategy='most_frequent')),
+     ('ohep', OneHotEncoder(drop='first', handle_unknown='ignore', sparse=False))
+    ]
+    )
+
+# создаём пайплайн для подготовки признаков из списка ord_columns: заполнение пропусков и Ordinal-кодирование
+# SimpleImputer + OE + SimpleImputer
+ord_pipe = Pipeline(
+    [('simpleImputer_before_ord', SimpleImputer(missing_values=np.nan, strategy='most_frequent')),
+     ('ordp',  OrdinalEncoder(
+                categories=[
+                    ['medium', 'high', 'low'],
+                    
+                ], 
+                handle_unknown='use_encoded_value', unknown_value=np.nan
+            )
+        ),
+     ('simpleImputer_after_ord', SimpleImputer(missing_values=np.nan, strategy='most_frequent'))
+    ]
+)
+
+num_pipe = Pipeline(
+    [
+        (
+            'nump', 
+            StandardScaler()
+        )
+    ]
+)
+
+# создаём общий пайплайн для подготовки данных
+data_preprocessor = ColumnTransformer(
+    [('ohe', ohe_pipe, ohe_columns),
+     ('ord', ord_pipe, ord_columns),
+     ('num', num_pipe, num_columns)
+    ], 
+    remainder='passthrough'
+)
+
+# создаём итоговый пайплайн: подготовка данных и модель
+pipe_final = Pipeline([
+    ('preprocessor', data_preprocessor),
+    ('models', DecisionTreeClassifier(random_state=RANDOM_STATE))
+])
+
+numerizators = [
+    StandardScaler(),
+    MinMaxScaler(), 
+    RobustScaler(), 
+    'passthrough'
+]
+
+param_grid = [
+    # словарь для модели DecisionTreeRegressor()
+    {
+        'models': [DecisionTreeRegressor(random_state=RANDOM_STATE)],
+        'models__max_depth': range(2,15),
+        'models__max_features': range(2,10),
+        'preprocessor__num__nump': numerizators 
+    },
+    
+
+    # словарь для модели LogisticRegression()
+    {
+        'models': [LogisticRegression(
+            random_state=RANDOM_STATE, 
+            solver='liblinear', 
+            penalty='l1'
+        )],
+        'models__C': range(1,5),
+        'preprocessor__num__nump': numerizators    
+    },
+    
+    
+    # словарь для модели LinearRegression()
+    {
+        'models': [LinearRegression()],
+        'preprocessor__num__nump': numerizators 
+    }
+]
+
+smape_scorer = make_scorer(smape_nonmy) #, greater_is_better=False)
+
+randomized_search = RandomizedSearchCV(
+    pipe_final, 
+    param_grid, 
+    cv=5,
+    scoring=smape_scorer,
+    random_state=RANDOM_STATE,
+    n_jobs=-1
+
+)
+
+randomized_search.fit(X_train, y_train)
